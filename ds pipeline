@@ -1,0 +1,294 @@
+
+#pipeline for ds models
+
+import os 
+import pandas as pd
+import numpy  as np
+from sklearn.model_selection import train_test_split
+import connector
+import statsmodels.api as sm
+from sklearn.linear_model import LogisticRegression, LinearRegression
+from sklearn.linear_model import Ridge, RidgeCV, ElasticNet, LassoCV, LassoLarsCV
+from sklearn.model_selection import cross_val_score
+from sklearn.metrics import mean_squared_error
+from math import sqrt
+from sklearn.metrics import precision_score, accuracy_score, recall_score, confusion_matrix
+from sklearn.ensemble import GradientBoostingClassifier,RandomForestClassifier, GradientBoostingRegressor
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
+import time
+
+
+# read in data
+
+data=pd.csv
+
+
+# data_processing
+
+#filtering
+
+data=data[data['var1']>0.01]
+data=data[data['var2']<0.99]
+
+# handling missing data
+
+missing_count=pd.DataFrame({'var':data.isnull().sum().index, 'cnt': data.isnull().sum().values})
+
+total_cnt=data.shape[0]
+missing_count['missing_pctg']=missing_count['cnt']/total_cnt
+cut_off_pctg=0.85
+vars_to_keep=list(missing_count[missing_count['missing_pctg']<cut_off_pctg]['var'])
+
+# convert to float
+
+data=data.astype(float)
+
+
+# replace missing data with 0, and create dummy variables
+
+
+for item in vars_to_keep:
+    
+    col_name='dummy_'+item
+    data[col_name]=np.where(data[item].isnull(), 1, 0)
+    data[item].fillna(0, inplace=True)
+
+
+
+# split variable data type
+dtype=pd.DataFrame(data.dtypes)
+dtype.columns=['type']
+
+cat_var=list(dtype[dtype.type=='object'].index)
+
+numeric_var=list(dtype[dtype.type=='float64'].index)
+
+
+# creating dummy variables 
+for item in cat_var:
+    data_1=pd.get_dummies(data_1, columns=[item])
+
+
+#Flooring and capping
+
+# calculate statistics from training data
+dist_data=X_train[numeric_var].quantile([0,.01,0.05,0.5,0.9 ,0.99,1])
+
+for col in numeric_var:
+    
+    flooring_value=dist_data[col][0.01]
+    capping_value=dist_data[col][0.99]
+    #print col, flooring_value, capping_value
+    
+    X_train.loc[X_train[col]<flooring_value, col] = flooring_value
+    X_train.loc[X_train[col]>capping_value, col] = capping_value
+    
+    X_test.loc[X_test[col]<flooring_value, col] = flooring_value
+    X_test.loc[X_test[col]>capping_value, col] = capping_value
+   
+
+# other derived variables
+
+def generate_other_derived_features(df):
+
+    # define new feature be adding 
+    df['new']=df['name_1']+df['name_2']
+   
+    
+    # define inverse
+    df['new']=df['name_1']*1./df['name_2']
+   
+
+    #missing value
+
+    df['new'].fillna(0, inplace=True)
+    
+
+    #infinate value
+    df['name_1'][df['name_1'] == inf] = 0
+    
+    #ranking
+    df['new']= df.sort_values(['name_1'], ascending=[True]).groupby(['name_2']).cumcount() + 1
+    
+    #ranking percentage
+    df['new']= df['ranking']*1./df['count']
+
+    # drop variables
+    df=df.drop('dim_market_1',1) 
+        
+    
+    
+    return df
+
+
+
+y=model_data['dim_is_requested'].astype(float)
+
+X=model_data.drop('dim_is_requested',1) 
+
+
+X_train, X_test, y_train, y_test = train_test_split(X, y,test_size=0.3, stratify=y ) 
+
+
+
+#xgt model
+xgb_0=xgboost.XGBClassifier(max_depth=3,n_estimators=1200, 
+                            learning_rate=0.05, subsample=0.8, 
+                           reg_alpha=5)
+
+xgb_0.fit(X_train, y_train)
+
+
+
+# logistic regression
+logit=LogisticRegression(penalty='l1', dual=False, tol=0.01, C=1.0, fit_intercept=True, 
+                   intercept_scaling=1, class_weight=None, random_state=None, 
+                   solver='liblinear', max_iter=1000, multi_class='ovr', 
+                   verbose=0, warm_start=False, n_jobs=1)
+
+logit.fit(X_train[selected_vars], y_train)
+
+
+
+
+y_pred_train_xgb_0 = xgb_0.predict(X_train)
+y_pred_test_xgb_0 = xgb_0.predict(X_test)
+y_pred_proba_train_xgb_0=xgb_0.predict_proba(X_train)
+y_pred_proba_test_xgb_0=xgb_0.predict_proba(X_test)
+
+
+importance_matrix_0=pd.DataFrame(sorted(zip(X_train.columns.values,xgb_0.feature_importances_), key=lambda x: -abs(x[1])))
+importance_matrix_0.columns=['var','importance']
+importance_matrix_0['cum_importance']=importance_matrix_0['importance'].cumsum()
+
+
+
+pd.options.display.max_rows = 999
+importance_matrix_0
+
+
+# test probability cutoff
+y_pred_train_xgb_adj_0= pd.DataFrame([ (item>0.45)*1 for item in y_pred_proba_train_xgb_0])[1]
+y_pred_train_xgb_adj_0.describe()
+
+y_pred_test_xgb_adj_0= pd.DataFrame([ (item>0.45)*1 for item in y_pred_proba_test_xgb_0])[1]
+y_pred_test_xgb_adj_0.describe()
+
+
+
+print "Xgboost on the training set:"
+print "confusion matrix" 
+print pd.DataFrame(confusion_matrix(y_train,y_pred_train_xgb_0))
+print "accuracy:",accuracy_score(y_train,y_pred_train_xgb_0)
+print "precision:",precision_score(y_train,y_pred_train_xgb_0)
+print "recall:", recall_score(y_train,y_pred_train_xgb_0)
+print "f1 score:", f1_score(y_train,y_pred_train_xgb_0)
+
+
+print "Xgboost on the training set with Adjustments:"
+print "confusion matrix" 
+print pd.DataFrame(confusion_matrix(y_train,y_pred_train_xgb_adj_0))
+print "accuracy:",accuracy_score(y_train,y_pred_train_xgb_adj_0)
+print "precision:",precision_score(y_train,y_pred_train_xgb_adj_0)
+print "recall:", recall_score(y_train,y_pred_train_xgb_adj_0)
+print "f1 score:", f1_score(y_train,y_pred_train_xgb_adj_0)
+
+
+
+print "Xgboost on Test set:"
+print "confusion matrix" 
+print pd.DataFrame(confusion_matrix(y_test,y_pred_test_xgb_0))
+print "accuracy:",accuracy_score(y_test,y_pred_test_xgb_0)
+print "precision:",precision_score(y_test,y_pred_test_xgb_0)
+print "recall:", recall_score(y_test,y_pred_test_xgb_0)
+print "f1 score:", f1_score(y_test,y_pred_test_xgb_0)
+
+
+print "Xgboost on the test set with Adjustments:"
+print "confusion matrix" 
+print pd.DataFrame(confusion_matrix(y_test,y_pred_test_xgb_adj_0))
+print "accuracy:",accuracy_score(y_test,y_pred_test_xgb_adj_0)
+print "precision:",precision_score(y_test,y_pred_test_xgb_adj_0)
+print "recall:", recall_score(y_test,y_pred_test_xgb_adj_0)
+print "f1 score:", f1_score(y_test,y_pred_test_xgb_adj_0)
+
+
+
+selected_vars=importance_matrix_0[importance_matrix_0['cum_importance']<0.996]['var']
+print selected_vars
+
+
+# plot distribution
+y_score_weighted=(y_score_xgb*0.85+y_score_logit*0.15)
+
+d_results_y['Weighted Model']=y_score_weighted
+
+
+def prob_distribution( vecScore based on '+vec+ '(Test Set)'
+    pyplot.hist(pd.DataFrame(d_results_y[vec])[1],50, color='xkcd:blue')  
+    pyplot.title(title)
+    pyplot.show()
+
+
+# Visualization of Model Accuray
+
+def accuracy_vis(pred_y):
+    comparison_test=pd.DataFrame(list(yy))
+    comparison_test.columns=['conversion']
+    comparison_test['submit_score'] = pd.Series(pred_y, index=comparison_test.index)
+    comparison_test['score_interval']=comparison_test['submit_score'].apply(lambda x: int((x+0.01)/0.02)*0.02)
+
+    comparison_test_final=comparison_test.groupby('score_interval')['conversion'].mean()
+    comparison_test_final.columns=['score_interval','actual_submit_rate']
+    
+    #print comparison_test.groupby('score_interval')['conversion'].count()
+
+    # too few observation for score intervals greater than 0.9, so dropping these intervals for now
+    short_comparison_test=comparison_test_final[comparison_test_final.index<0.91]
+    
+    x_test_plot = pd.Series(short_comparison_test.index);
+    y_test_plot = pd.Series(short_comparison_test)
+    f, ax = pyplot.subplots(figsize = (9, 6))
+    pyplot.plot(x_test_plot, y_test_plot,'ro',color='b')
+
+    y_line=x_test_plot
+    pyplot.plot(x_test_plot, y_line, linestyle='-',color='xkcd:blue')
+
+    pyplot.ylabel('Actual  Percentage')
+    pyplot.xlabel('Predicted Score')
+    pyplot.title('Comparison of Prediction and Actual Rates (Test Set)')
+    pyplot.show()
+
+
+accuracy_vis(d_results_y['GBM'])
+
+
+
+
+# linear regression
+
+lm_all = sm.OLS(y_train_II, X_train_II[regression_var]).fit()   
+
+print sqrt(mean_squared_error(y_train_II, lm_all.predict(X_train_II[regression_var])) )   
+print sqrt(mean_squared_error(y_test_II, lm_all.predict(X_test_II[regression_var]))  )
+
+
+y_test_pred_II=lm_final.predict(X_test_II[regression_var_final])
+plt.hist(y_test_pred_adj ,50, color='xkcd:blue')  
+plt.title('Distribution of Predictd results(Test Set)')
+plt.show()
+
+
+# creating results comparison ( train)
+
+comparison_train=pd.DataFrame(list(y_train_II))
+comparison_train.columns=['a']
+y_train_pred_ls=list(y_train_pred_adj)[:]
+comparison_train=comparison_train.assign(pred=y_train_pred_ls)
+
+comparison_train['ratio_pred']=comparison_train['pred']/comparison_train['actual']
+
+comparison_train['delta_pred']=comparison_train['pred']-comparison_train['actual']
+
+
